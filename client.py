@@ -200,26 +200,44 @@ def main():
     
     print("=== Screen Share Client (Optimized) ===")
     
-    # Get server details from user
+    # Get server details from user in single input format
     while True:
         try:
-            host = input("Enter server IP address (or 'localhost' for same machine): ").strip()
+            connection_input = input("Enter server address (IP:PORT, e.g., '192.168.1.100:8888' or 'localhost:8888'): ").strip()
+            
+            if not connection_input:
+                print("Server address is required!")
+                continue
+            
+            # Parse the input
+            if ':' in connection_input:
+                host, port_str = connection_input.rsplit(':', 1)  # Split from right to handle IPv6
+                host = host.strip()
+                port_str = port_str.strip()
+            else:
+                print("Invalid format! Please use 'IP:PORT' format (e.g., '192.168.1.100:8888')")
+                continue
+            
+            # Validate host
             if not host:
                 host = "localhost"
             
-            port = input("Enter server port: ").strip()
-            if not port:
-                print("Port is required!")
-                continue
-            
-            port = int(port)
-            if port < 1024 or port > 65535:
-                print("Port must be between 1024 and 65535")
+            # Validate port
+            try:
+                port = int(port_str)
+                if port < 1024 or port > 65535:
+                    print("Port must be between 1024 and 65535")
+                    continue
+            except ValueError:
+                print("Invalid port number!")
                 continue
                 
+            print(f"Connecting to {host}:{port}...")
             break
-        except ValueError:
-            print("Invalid port number!")
+            
+        except Exception as e:
+            print(f"Error parsing input: {e}")
+            print("Please use format: IP:PORT (e.g., '192.168.1.100:8888')")
     
     # Connect to server
     if client.connect_to_server(host, port):

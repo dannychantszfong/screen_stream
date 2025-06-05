@@ -4,6 +4,24 @@ import struct
 import cv2
 import numpy as np
 
+def get_local_ip():
+    """Get the local IP address of this machine"""
+    try:
+        # Connect to a remote address to determine local IP
+        # This doesn't actually send data, just determines routing
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+        return local_ip
+    except Exception:
+        try:
+            # Fallback method
+            hostname = socket.gethostname()
+            local_ip = socket.gethostbyname(hostname)
+            return local_ip
+        except Exception:
+            return "Unable to determine"
+
 class ScreenShareServer:
     def __init__(self):
         self.server_socket = None
@@ -21,6 +39,13 @@ class ScreenShareServer:
             
             self.running = True
             print(f"Server started on {host}:{port}")
+            
+            # Display local IP address for easy connection
+            local_ip = get_local_ip()
+            print(f"Local IP address: {local_ip}")
+            if host == "0.0.0.0":
+                print(f"Clients can connect using: {local_ip}:{port}")
+            
             print("Waiting for client connection...")
             
             return True
