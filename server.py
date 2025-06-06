@@ -92,13 +92,17 @@ class ScreenShareServer:
             return None
     
     def display_stream(self):
-        """Receive and display the video stream"""
+        """Receive and display the video stream with proper aspect ratio handling"""
         if not self.client_socket:
             print("No client connected!")
             return
         
         self.receiving = True
-        print("Receiving stream... Press 'q' to quit")
+        print("Receiving stream... Press 'q' to quit, 'f' for fullscreen, 's' to fit screen")
+        
+        # Display mode settings
+        fit_to_screen = False
+        window_created = False
         
         try:
             while self.receiving:
@@ -114,13 +118,83 @@ class ScreenShareServer:
                 frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                 
                 if frame is not None:
-                    # Display the frame
-                    cv2.imshow('Screen Share - Server', frame)
+                    original_height, original_width = frame.shape[:2]
                     
-                    # Check for quit key
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                    # Create window with proper sizing on first frame
+                    if not window_created:
+                        cv2.namedWindow('Screen Share - Server', cv2.WINDOW_NORMAL)
+                        
+                        # Get screen dimensions for smart initial sizing
+                        try:
+                            import tkinter as tk
+                            root = tk.Tk()
+                            screen_width = root.winfo_screenwidth()
+                            screen_height = root.winfo_screenheight()
+                            root.destroy()
+                            
+                            # Calculate initial window size (80% of screen size max)
+                            max_display_width = int(screen_width * 0.8)
+                            max_display_height = int(screen_height * 0.8)
+                            
+                            # Scale frame to fit screen while maintaining aspect ratio
+                            scale_w = max_display_width / original_width
+                            scale_h = max_display_height / original_height
+                            scale = min(scale_w, scale_h, 1.0)  # Don't upscale
+                            
+                            display_width = int(original_width * scale)
+                            display_height = int(original_height * scale)
+                            
+                            cv2.resizeWindow('Screen Share - Server', display_width, display_height)
+                            print(f"Window sized to {display_width}x{display_height} (scale: {scale:.2f})")
+                            print(f"Original stream: {original_width}x{original_height}")
+                            
+                        except ImportError:
+                            # Fallback if tkinter not available
+                            cv2.resizeWindow('Screen Share - Server', min(1200, original_width), min(800, original_height))
+                            print(f"Stream resolution: {original_width}x{original_height}")
+                        
+                        window_created = True
+                    
+                    # Handle different display modes
+                    display_frame = frame
+                    if fit_to_screen:
+                        # Get current window size
+                        try:
+                            # This is a workaround since OpenCV doesn't provide direct window size access
+                            window_rect = cv2.getWindowImageRect('Screen Share - Server')
+                            if window_rect[2] > 0 and window_rect[3] > 0:
+                                display_frame = cv2.resize(frame, (window_rect[2], window_rect[3]), 
+                                                         interpolation=cv2.INTER_LINEAR)
+                        except:
+                            pass  # Use original frame if resize fails
+                    
+                    # Display the frame
+                    cv2.imshow('Screen Share - Server', display_frame)
+                    
+                    # Handle key presses
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q'):
                         print("Quit key pressed")
                         break
+                    elif key == ord('f'):
+                        # Toggle fullscreen
+                        cv2.setWindowProperty('Screen Share - Server', cv2.WND_PROP_FULLSCREEN, 
+                                            cv2.WINDOW_FULLSCREEN)
+                        print("Switched to fullscreen mode")
+                    elif key == ord('s'):
+                        # Toggle fit to screen
+                        fit_to_screen = not fit_to_screen
+                        if fit_to_screen:
+                            print("Fit to screen mode enabled")
+                        else:
+                            print("Original size mode enabled")
+                    elif key == ord('r'):
+                        # Reset window size
+                        cv2.setWindowProperty('Screen Share - Server', cv2.WND_PROP_FULLSCREEN, 
+                                            cv2.WINDOW_NORMAL)
+                        cv2.resizeWindow('Screen Share - Server', original_width, original_height)
+                        fit_to_screen = False
+                        print(f"Reset to original size: {original_width}x{original_height}")
                 else:
                     print("Failed to decode frame")
                     

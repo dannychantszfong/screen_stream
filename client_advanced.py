@@ -284,32 +284,58 @@ class AdvancedScreenShareClient:
                 break
     
     def encode_frame_advanced(self, frame):
-        """Advanced frame encoding with high-quality settings to reduce blur"""
+        """Advanced frame encoding with high-quality settings and proper aspect ratio"""
         try:
             original_height, original_width = frame.shape[:2]
+            original_aspect_ratio = original_width / original_height
             
-            # Smart resolution handling - avoid unnecessary resizing
+            # Smart resolution handling with proper aspect ratio preservation
             if self.preserve_original_resolution:
                 # Keep original resolution for maximum quality
                 new_width = original_width
                 new_height = original_height
+                print(f"Using original resolution: {new_width}x{new_height}")
             else:
-                # Platform-specific resolution limits - but be more conservative
+                # Platform-specific resolution limits - but maintain aspect ratio
                 if IS_APPLE_SILICON:
                     max_width = 2560  # Higher res for Apple Silicon
+                    max_height = 1600  # 16:10 aspect ratio limit
                 elif IS_MACOS:
                     max_width = 1920  # Higher res for Intel Mac
+                    max_height = 1200  # 16:10 aspect ratio limit
                 else:
                     max_width = 1600  # Higher res for Windows/Linux
+                    max_height = 1000  # 16:10 aspect ratio limit
                 
-                # Only resize if significantly larger than max
-                if original_width > max_width * 1.2:
-                    new_width = max_width
-                    new_height = int(original_height * (new_width / original_width))
+                # Calculate new dimensions while preserving aspect ratio
+                if original_width > max_width or original_height > max_height:
+                    # Calculate scale factor based on both width and height limits
+                    width_scale = max_width / original_width
+                    height_scale = max_height / original_height
+                    scale_factor = min(width_scale, height_scale)  # Use the smaller scale to fit both dimensions
+                    
+                    new_width = int(original_width * scale_factor)
+                    new_height = int(original_height * scale_factor)
+                    
+                    # Ensure dimensions are even numbers (better for video encoding)
+                    new_width = new_width - (new_width % 2)
+                    new_height = new_height - (new_height % 2)
+                    
+                    print(f"Resizing from {original_width}x{original_height} to {new_width}x{new_height} (scale: {scale_factor:.2f})")
                 else:
-                    # Keep original size if not too large
+                    # Keep original size if within limits
                     new_width = original_width
                     new_height = original_height
+            
+            # Verify aspect ratio is preserved
+            new_aspect_ratio = new_width / new_height
+            aspect_ratio_diff = abs(original_aspect_ratio - new_aspect_ratio)
+            if aspect_ratio_diff > 0.01:  # Allow small floating point differences
+                print(f"⚠️  Aspect ratio changed: {original_aspect_ratio:.3f} → {new_aspect_ratio:.3f}")
+                # Recalculate to fix aspect ratio
+                new_height = int(new_width / original_aspect_ratio)
+                new_height = new_height - (new_height % 2)  # Ensure even number
+                print(f"Corrected to: {new_width}x{new_height}")
             
             # High-quality resizing if needed
             if new_width != original_width or new_height != original_height:
@@ -321,6 +347,7 @@ class AdvancedScreenShareClient:
                     
                 frame = cv2.resize(frame, (new_width, new_height), 
                                  interpolation=interpolation)
+                print(f"Resized using {interpolation} interpolation")
             
             # High-quality encoding options
             if self.use_png_compression:
