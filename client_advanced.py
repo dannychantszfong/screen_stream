@@ -31,7 +31,13 @@ class AdvancedScreenShareClient:
         self.use_hardware_encoding = False
         self.adaptive_quality = True
         self.target_fps = 30
-        self.current_quality = 75
+        self.current_quality = 90  # Start with higher quality
+        
+        # Quality settings
+        self.use_png_compression = False  # Option for lossless compression
+        self.min_quality = 60  # Higher minimum quality
+        self.max_quality = 98  # Higher maximum quality
+        self.preserve_original_resolution = False  # Option to keep original size
         
         # Performance monitoring
         self.frame_times = []
@@ -160,27 +166,28 @@ class AdvancedScreenShareClient:
         total_time = frame_time + network_time
         target_time = 1.0 / self.target_fps
         
-        # Platform-specific quality adjustments
+        # Platform-specific quality adjustments - less aggressive quality reduction
         if IS_APPLE_SILICON:
             # Apple Silicon is generally faster, can handle higher quality
-            quality_step = 3
-            min_quality = 40
-            max_quality = 95
+            quality_step = 2  # Smaller steps for smoother quality changes
+            min_quality = 70  # Higher minimum for Apple Silicon
+            max_quality = 98
         elif IS_MACOS:
             # Intel Mac
-            quality_step = 4
-            min_quality = 35
-            max_quality = 90
+            quality_step = 3
+            min_quality = 65  # Higher minimum for Intel Mac
+            max_quality = 95
         else:
             # Windows/Linux
-            quality_step = 5
-            min_quality = 30
-            max_quality = 90
+            quality_step = 4
+            min_quality = self.min_quality
+            max_quality = self.max_quality
         
-        if total_time > target_time * 1.2:  # 20% over target
+        # Be less aggressive with quality reduction
+        if total_time > target_time * 1.5:  # Only reduce if significantly over target
             # Reduce quality
             self.current_quality = max(min_quality, self.current_quality - quality_step)
-        elif total_time < target_time * 0.8:  # 20% under target
+        elif total_time < target_time * 0.7:  # Increase quality when well under target
             # Increase quality
             self.current_quality = min(max_quality, self.current_quality + (quality_step // 2))
     
@@ -277,63 +284,88 @@ class AdvancedScreenShareClient:
                 break
     
     def encode_frame_advanced(self, frame):
-        """Advanced frame encoding with platform-specific optimizations"""
+        """Advanced frame encoding with high-quality settings to reduce blur"""
         try:
-            # Resize with platform-optimized settings
-            height, width = frame.shape[:2]
+            original_height, original_width = frame.shape[:2]
             
-            # Platform-specific resolution limits
-            if IS_APPLE_SILICON:
-                max_width = 1920  # Apple Silicon can handle higher res
-            elif IS_MACOS:
-                max_width = 1440  # Intel Mac
+            # Smart resolution handling - avoid unnecessary resizing
+            if self.preserve_original_resolution:
+                # Keep original resolution for maximum quality
+                new_width = original_width
+                new_height = original_height
             else:
-                max_width = 1280  # Windows/Linux
-            
-            new_width = min(max_width, width)
-            new_height = int(height * (new_width / width))
-            
-            if new_width != width:
-                # Platform-specific interpolation
-                if IS_APPLE_SILICON and self.current_quality > 70:
-                    interpolation = cv2.INTER_CUBIC  # Higher quality on Apple Silicon
-                elif self.current_quality > 70:
-                    interpolation = cv2.INTER_LANCZOS4  # Good quality
+                # Platform-specific resolution limits - but be more conservative
+                if IS_APPLE_SILICON:
+                    max_width = 2560  # Higher res for Apple Silicon
+                elif IS_MACOS:
+                    max_width = 1920  # Higher res for Intel Mac
                 else:
-                    interpolation = cv2.INTER_LINEAR  # Faster
+                    max_width = 1600  # Higher res for Windows/Linux
+                
+                # Only resize if significantly larger than max
+                if original_width > max_width * 1.2:
+                    new_width = max_width
+                    new_height = int(original_height * (new_width / original_width))
+                else:
+                    # Keep original size if not too large
+                    new_width = original_width
+                    new_height = original_height
+            
+            # High-quality resizing if needed
+            if new_width != original_width or new_height != original_height:
+                # Always use highest quality interpolation for resizing
+                if IS_APPLE_SILICON:
+                    interpolation = cv2.INTER_LANCZOS4  # Best quality
+                else:
+                    interpolation = cv2.INTER_CUBIC  # High quality
                     
                 frame = cv2.resize(frame, (new_width, new_height), 
                                  interpolation=interpolation)
             
-            # Platform-specific encoding parameters
-            if self.use_hardware_encoding:
-                if IS_APPLE_SILICON:
-                    # Apple Silicon optimized encoding
+            # High-quality encoding options
+            if self.use_png_compression:
+                # PNG for lossless compression (larger files but perfect quality)
+                encode_param = [
+                    int(cv2.IMWRITE_PNG_COMPRESSION), 3  # Balanced compression/speed
+                ]
+                result, encoded_img = cv2.imencode('.png', frame, encode_param)
+            else:
+                # High-quality JPEG encoding
+                if self.use_hardware_encoding:
+                    if IS_APPLE_SILICON:
+                        # Apple Silicon optimized encoding - highest quality
+                        encode_param = [
+                            int(cv2.IMWRITE_JPEG_QUALITY), self.current_quality,
+                            int(cv2.IMWRITE_JPEG_OPTIMIZE), 1,
+                            int(cv2.IMWRITE_JPEG_PROGRESSIVE), 1,
+                            int(cv2.IMWRITE_JPEG_LUMA_QUALITY), self.current_quality,
+                            int(cv2.IMWRITE_JPEG_CHROMA_QUALITY), self.current_quality
+                        ]
+                    elif IS_MACOS:
+                        # Intel Mac encoding - high quality
+                        encode_param = [
+                            int(cv2.IMWRITE_JPEG_QUALITY), self.current_quality,
+                            int(cv2.IMWRITE_JPEG_OPTIMIZE), 1,
+                            int(cv2.IMWRITE_JPEG_LUMA_QUALITY), self.current_quality,
+                            int(cv2.IMWRITE_JPEG_CHROMA_QUALITY), min(95, self.current_quality + 5)
+                        ]
+                    else:
+                        # Windows/Linux hardware encoding
+                        encode_param = [
+                            int(cv2.IMWRITE_JPEG_QUALITY), self.current_quality,
+                            int(cv2.IMWRITE_JPEG_OPTIMIZE), 1,
+                            int(cv2.IMWRITE_JPEG_LUMA_QUALITY), self.current_quality
+                        ]
+                else:
+                    # High-quality software encoding
                     encode_param = [
                         int(cv2.IMWRITE_JPEG_QUALITY), self.current_quality,
                         int(cv2.IMWRITE_JPEG_OPTIMIZE), 1,
-                        int(cv2.IMWRITE_JPEG_PROGRESSIVE), 1
+                        int(cv2.IMWRITE_JPEG_LUMA_QUALITY), self.current_quality,
+                        int(cv2.IMWRITE_JPEG_CHROMA_QUALITY), min(98, self.current_quality + 3)
                     ]
-                elif IS_MACOS:
-                    # Intel Mac encoding
-                    encode_param = [
-                        int(cv2.IMWRITE_JPEG_QUALITY), self.current_quality,
-                        int(cv2.IMWRITE_JPEG_OPTIMIZE), 1
-                    ]
-                else:
-                    # Windows/Linux hardware encoding
-                    encode_param = [
-                        int(cv2.IMWRITE_JPEG_QUALITY), self.current_quality,
-                        int(cv2.IMWRITE_JPEG_OPTIMIZE), 1
-                    ]
-            else:
-                # Software encoding
-                encode_param = [
-                    int(cv2.IMWRITE_JPEG_QUALITY), self.current_quality,
-                    int(cv2.IMWRITE_JPEG_OPTIMIZE), 1
-                ]
-            
-            result, encoded_img = cv2.imencode('.jpg', frame, encode_param)
+                
+                result, encoded_img = cv2.imencode('.jpg', frame, encode_param)
             
             if result:
                 return encoded_img.tobytes()
@@ -543,6 +575,33 @@ def main():
     
     # Configuration options
     print("\nConfiguration:")
+    
+    # Quality settings
+    print("\n🎨 Quality Settings:")
+    quality_mode = input("Quality mode (1=Balanced, 2=High Quality, 3=Maximum Quality): ").strip()
+    
+    if quality_mode == "2":
+        print("🔧 High Quality mode selected")
+        client.current_quality = 95
+        client.min_quality = 75
+        client.max_quality = 98
+        client.preserve_original_resolution = False
+    elif quality_mode == "3":
+        print("🔧 Maximum Quality mode selected (larger bandwidth usage)")
+        client.current_quality = 98
+        client.min_quality = 85
+        client.max_quality = 98
+        client.preserve_original_resolution = True
+        
+        # Option for PNG compression
+        use_png = input("Use PNG compression for lossless quality? (y/n, slower): ").strip().lower()
+        if use_png == 'y':
+            client.use_png_compression = True
+            print("🖼️  PNG compression enabled (lossless)")
+    else:
+        print("🔧 Balanced mode selected")
+    
+    # FPS settings
     try:
         fps_input = input("Target FPS (default 30): ").strip()
         if fps_input:
@@ -550,10 +609,20 @@ def main():
     except:
         pass
     
+    # Adaptive quality
     adaptive = input("Enable adaptive quality? (y/n, default y): ").strip().lower()
     client.adaptive_quality = adaptive != 'n'
     
+    # Display current settings
+    print(f"\n📊 Current Settings:")
+    print(f"   Quality: {client.current_quality}% (range: {client.min_quality}-{client.max_quality}%)")
+    print(f"   Compression: {'PNG (lossless)' if client.use_png_compression else 'JPEG (lossy)'}")
+    print(f"   Resolution: {'Original' if client.preserve_original_resolution else 'Adaptive'}")
+    print(f"   Target FPS: {client.target_fps}")
+    print(f"   Adaptive Quality: {'Enabled' if client.adaptive_quality else 'Disabled'}")
+    
     # Get server connection
+    print("\n🌐 Connection:")
     while True:
         try:
             connection_input = input("Enter server address (IP:PORT): ").strip()
