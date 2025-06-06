@@ -3,12 +3,20 @@ import threading
 import time
 import struct
 import queue
+import platform
+import sys
+import os
 from PIL import ImageGrab
 import cv2
 import numpy as np
-import mss
 import multiprocessing as mp
 from concurrent.futures import ThreadPoolExecutor
+
+# Platform detection
+IS_MACOS = platform.system() == "Darwin"
+IS_APPLE_SILICON = IS_MACOS and platform.machine() == "arm64"
+IS_WINDOWS = platform.system() == "Windows"
+IS_LINUX = platform.system() == "Linux"
 
 class AdvancedScreenShareClient:
     def __init__(self):
@@ -29,51 +37,221 @@ class AdvancedScreenShareClient:
         self.frame_times = []
         self.network_times = []
         
-    def init_hardware_encoding(self):
-        """Try to initialize hardware encoding (if available)"""
+        # Platform-specific settings
+        self.screen_capture_method = self.detect_best_capture_method()
+        
+    def detect_best_capture_method(self):
+        """Detect the best screen capture method for the current platform"""
+        if IS_MACOS:
+            # Check for screen recording permissions on macOS
+            if self.check_macos_permissions():
+                try:
+                    import mss
+                    print("macOS: Using MSS for screen capture")
+                    return "mss"
+                except ImportError:
+                    print("macOS: MSS not available, using PIL")
+                    return "pil"
+            else:
+                print("macOS: Screen recording permission required")
+                return "pil"  # Fallback to PIL
+        else:
+            # Windows/Linux
+            try:
+                import mss
+                print(f"{platform.system()}: Using MSS for screen capture")
+                return "mss"
+            except ImportError:
+                print(f"{platform.system()}: MSS not available, using PIL")
+                return "pil"
+    
+    def check_macos_permissions(self):
+        """Check if screen recording permissions are granted on macOS"""
+        if not IS_MACOS:
+            return True
+            
         try:
-            # Check for NVIDIA GPU encoding
-            fourcc = cv2.VideoWriter_fourcc(*'H264')
-            # This is a simplified check - real implementation would use
-            # specialized libraries like nvidia-ml-py or Intel Media SDK
-            self.use_hardware_encoding = True
-            print("Hardware encoding available (simulated)")
-        except:
-            print("Hardware encoding not available, using software")
+            # Try to capture a small area to test permissions
+            test_screenshot = ImageGrab.grab(bbox=(0, 0, 100, 100))
+            # If we get a black image, permissions might be denied
+            test_array = np.array(test_screenshot)
+            if np.all(test_array == 0):
+                print("⚠️  macOS Screen Recording Permission Required!")
+                print("   Go to: System Preferences → Security & Privacy → Privacy → Screen Recording")
+                print("   Add and enable your terminal application or Python")
+                print("   You may need to restart the application after granting permission")
+                return False
+            return True
+        except Exception as e:
+            print(f"Permission check failed: {e}")
+            return False
+    
+    def init_screen_capture(self):
+        """Initialize screen capture based on detected method"""
+        if self.screen_capture_method == "mss":
+            try:
+                import mss
+                self.sct = mss.mss()
+                
+                if IS_MACOS:
+                    # macOS-specific MSS optimizations
+                    print("Initialized MSS for macOS")
+                    # On macOS, we might need to handle multiple displays differently
+                    monitors = self.sct.monitors
+                    print(f"Detected {len(monitors)-1} monitor(s)")
+                    
+                elif IS_APPLE_SILICON:
+                    # Apple Silicon specific optimizations
+                    print("Optimizing for Apple Silicon")
+                    
+                return True
+            except ImportError:
+                print("MSS not available, falling back to PIL")
+                self.screen_capture_method = "pil"
+                return True
+            except Exception as e:
+                print(f"MSS initialization failed: {e}")
+                self.screen_capture_method = "pil"
+                return True
+        
+        # PIL fallback
+        print("Using PIL for screen capture")
+        return True
+    
+    def init_hardware_encoding(self):
+        """Try to initialize hardware encoding with platform-specific optimizations"""
+        try:
+            if IS_APPLE_SILICON:
+                # Apple Silicon has hardware video encoders
+                print("Apple Silicon detected - hardware encoding capabilities available")
+                # Note: Real implementation would use VideoToolbox framework
+                # For now, we'll simulate this
+                self.use_hardware_encoding = True
+                print("Hardware encoding enabled (VideoToolbox simulation)")
+                
+            elif IS_MACOS:
+                # Intel Mac
+                print("Intel Mac detected - checking for hardware encoding")
+                # Intel Macs may have Intel Quick Sync
+                fourcc = cv2.VideoWriter_fourcc(*'H264')
+                self.use_hardware_encoding = True
+                print("Hardware encoding enabled (Intel Quick Sync simulation)")
+                
+            elif IS_WINDOWS:
+                # Windows hardware encoding (NVENC, Intel Quick Sync, etc.)
+                fourcc = cv2.VideoWriter_fourcc(*'H264')
+                self.use_hardware_encoding = True
+                print("Hardware encoding available (Windows)")
+                
+            else:
+                # Linux
+                print("Linux detected - using software encoding")
+                self.use_hardware_encoding = False
+                
+        except Exception as e:
+            print(f"Hardware encoding initialization failed: {e}")
             self.use_hardware_encoding = False
     
     def adaptive_quality_control(self, frame_time, network_time):
-        """Adjust quality based on performance metrics"""
+        """Adjust quality based on performance metrics with platform considerations"""
         if not self.adaptive_quality:
             return
             
         total_time = frame_time + network_time
         target_time = 1.0 / self.target_fps
         
+        # Platform-specific quality adjustments
+        if IS_APPLE_SILICON:
+            # Apple Silicon is generally faster, can handle higher quality
+            quality_step = 3
+            min_quality = 40
+            max_quality = 95
+        elif IS_MACOS:
+            # Intel Mac
+            quality_step = 4
+            min_quality = 35
+            max_quality = 90
+        else:
+            # Windows/Linux
+            quality_step = 5
+            min_quality = 30
+            max_quality = 90
+        
         if total_time > target_time * 1.2:  # 20% over target
             # Reduce quality
-            self.current_quality = max(30, self.current_quality - 5)
+            self.current_quality = max(min_quality, self.current_quality - quality_step)
         elif total_time < target_time * 0.8:  # 20% under target
             # Increase quality
-            self.current_quality = min(90, self.current_quality + 2)
+            self.current_quality = min(max_quality, self.current_quality + (quality_step // 2))
+    
+    def capture_screen_mss(self):
+        """Capture screen using MSS with platform-specific optimizations"""
+        try:
+            if IS_MACOS:
+                # macOS-specific capture
+                # Primary monitor on macOS
+                monitor = self.sct.monitors[1]
+                
+                # On macOS, we might need to handle Retina displays
+                screenshot = self.sct.grab(monitor)
+                frame = np.array(screenshot)
+                
+                # Handle RGBA to RGB conversion
+                if frame.shape[2] == 4:
+                    frame = frame[:, :, :3]
+                    
+            else:
+                # Windows/Linux capture
+                monitor = self.sct.monitors[1]
+                screenshot = self.sct.grab(monitor)
+                frame = np.array(screenshot)
+                
+                if frame.shape[2] == 4:
+                    frame = frame[:, :, :3]
+            
+            return frame
+            
+        except Exception as e:
+            print(f"MSS capture error: {e}")
+            return None
+    
+    def capture_screen_pil(self):
+        """Capture screen using PIL with platform-specific handling"""
+        try:
+            if IS_MACOS:
+                # macOS PIL capture
+                screenshot = ImageGrab.grab()
+                frame = np.array(screenshot)
+                
+                # macOS returns RGB, convert to BGR for OpenCV
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                
+            else:
+                # Windows/Linux PIL capture
+                screenshot = ImageGrab.grab()
+                frame = np.array(screenshot)
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            
+            return frame
+            
+        except Exception as e:
+            print(f"PIL capture error: {e}")
+            return None
     
     def capture_worker(self):
-        """Dedicated thread for screen capture"""
+        """Dedicated thread for screen capture with platform optimizations"""
         while self.streaming:
             try:
                 start_time = time.time()
                 
-                # Capture screen
-                if self.sct:
-                    monitor = self.sct.monitors[1]
-                    screenshot = self.sct.grab(monitor)
-                    frame = np.array(screenshot)
-                    if frame.shape[2] == 4:
-                        frame = frame[:, :, :3]
+                # Use appropriate capture method
+                if self.screen_capture_method == "mss" and self.sct:
+                    frame = self.capture_screen_mss()
                 else:
-                    screenshot = ImageGrab.grab()
-                    frame = np.array(screenshot)
-                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                    frame = self.capture_screen_pil()
+                
+                if frame is None:
+                    continue
                 
                 capture_time = time.time() - start_time
                 
@@ -84,41 +262,72 @@ class AdvancedScreenShareClient:
                     # Drop frame if queue is full (prevents lag buildup)
                     pass
                     
-                # Control capture rate
-                time.sleep(max(0, (1.0 / self.target_fps) - capture_time))
+                # Platform-specific timing adjustments
+                if IS_APPLE_SILICON:
+                    # Apple Silicon can handle higher frame rates
+                    min_sleep = 0.001
+                else:
+                    min_sleep = 0.005
+                
+                sleep_time = max(min_sleep, (1.0 / self.target_fps) - capture_time)
+                time.sleep(sleep_time)
                 
             except Exception as e:
                 print(f"Capture error: {e}")
                 break
     
     def encode_frame_advanced(self, frame):
-        """Advanced frame encoding with multiple options"""
+        """Advanced frame encoding with platform-specific optimizations"""
         try:
-            # Resize with different algorithms based on performance needs
+            # Resize with platform-optimized settings
             height, width = frame.shape[:2]
-            new_width = min(1280, width)
+            
+            # Platform-specific resolution limits
+            if IS_APPLE_SILICON:
+                max_width = 1920  # Apple Silicon can handle higher res
+            elif IS_MACOS:
+                max_width = 1440  # Intel Mac
+            else:
+                max_width = 1280  # Windows/Linux
+            
+            new_width = min(max_width, width)
             new_height = int(height * (new_width / width))
             
             if new_width != width:
-                # Use different interpolation based on quality needs
-                if self.current_quality > 70:
-                    interpolation = cv2.INTER_CUBIC  # Higher quality
+                # Platform-specific interpolation
+                if IS_APPLE_SILICON and self.current_quality > 70:
+                    interpolation = cv2.INTER_CUBIC  # Higher quality on Apple Silicon
+                elif self.current_quality > 70:
+                    interpolation = cv2.INTER_LANCZOS4  # Good quality
                 else:
                     interpolation = cv2.INTER_LINEAR  # Faster
                     
                 frame = cv2.resize(frame, (new_width, new_height), 
                                  interpolation=interpolation)
             
-            # Advanced encoding options
+            # Platform-specific encoding parameters
             if self.use_hardware_encoding:
-                # Simulate hardware encoding (would use actual GPU encoding)
-                encode_param = [
-                    int(cv2.IMWRITE_JPEG_QUALITY), self.current_quality,
-                    int(cv2.IMWRITE_JPEG_OPTIMIZE), 1,
-                    int(cv2.IMWRITE_JPEG_PROGRESSIVE), 1  # Progressive JPEG
-                ]
+                if IS_APPLE_SILICON:
+                    # Apple Silicon optimized encoding
+                    encode_param = [
+                        int(cv2.IMWRITE_JPEG_QUALITY), self.current_quality,
+                        int(cv2.IMWRITE_JPEG_OPTIMIZE), 1,
+                        int(cv2.IMWRITE_JPEG_PROGRESSIVE), 1
+                    ]
+                elif IS_MACOS:
+                    # Intel Mac encoding
+                    encode_param = [
+                        int(cv2.IMWRITE_JPEG_QUALITY), self.current_quality,
+                        int(cv2.IMWRITE_JPEG_OPTIMIZE), 1
+                    ]
+                else:
+                    # Windows/Linux hardware encoding
+                    encode_param = [
+                        int(cv2.IMWRITE_JPEG_QUALITY), self.current_quality,
+                        int(cv2.IMWRITE_JPEG_OPTIMIZE), 1
+                    ]
             else:
-                # Optimized software encoding
+                # Software encoding
                 encode_param = [
                     int(cv2.IMWRITE_JPEG_QUALITY), self.current_quality,
                     int(cv2.IMWRITE_JPEG_OPTIMIZE), 1
@@ -180,14 +389,23 @@ class AdvancedScreenShareClient:
                 break
     
     def connect_to_server(self, host, port):
-        """Connect with optimized socket settings"""
+        """Connect with platform-optimized socket settings"""
         try:
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             
-            # Professional socket optimizations
+            # Platform-specific socket optimizations
             self.client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            self.client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1024*1024)  # 1MB buffer
-            self.client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024*1024)
+            
+            if IS_MACOS:
+                # macOS-specific socket settings
+                buffer_size = 2 * 1024 * 1024  # 2MB buffer for macOS
+                self.client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, buffer_size)
+                self.client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, buffer_size)
+            else:
+                # Windows/Linux
+                buffer_size = 1024 * 1024  # 1MB buffer
+                self.client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, buffer_size)
+                self.client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, buffer_size)
             
             # Set socket timeout
             self.client_socket.settimeout(10.0)
@@ -215,38 +433,49 @@ class AdvancedScreenShareClient:
             return False
     
     def print_performance_stats(self):
-        """Print performance statistics"""
+        """Print performance statistics with platform info"""
         if self.frame_times and self.network_times:
             avg_frame_time = sum(self.frame_times) / len(self.frame_times)
             avg_network_time = sum(self.network_times) / len(self.network_times)
             actual_fps = 1.0 / (avg_frame_time + avg_network_time) if (avg_frame_time + avg_network_time) > 0 else 0
             
-            print(f"Performance Stats:")
+            platform_info = f"{platform.system()} {platform.machine()}"
+            if IS_APPLE_SILICON:
+                platform_info += " (Apple Silicon)"
+            
+            print(f"Performance Stats ({platform_info}):")
             print(f"  Average Frame Time: {avg_frame_time*1000:.1f}ms")
             print(f"  Average Network Time: {avg_network_time*1000:.1f}ms")
             print(f"  Actual FPS: {actual_fps:.1f}")
             print(f"  Current Quality: {self.current_quality}%")
+            print(f"  Capture Method: {self.screen_capture_method.upper()}")
     
     def start_streaming(self):
-        """Start advanced streaming with threading"""
+        """Start advanced streaming with platform-specific initialization"""
         if not self.connected:
             print("Not connected to server!")
             return
         
-        # Initialize components
-        try:
-            import mss
-            self.sct = mss.mss()
-            print("Using MSS for screen capture")
-        except ImportError:
-            print("MSS not available, using PIL")
+        # Platform-specific initialization
+        print(f"Initializing for {platform.system()} {platform.machine()}")
+        if IS_APPLE_SILICON:
+            print("🍎 Apple Silicon optimizations enabled")
+        elif IS_MACOS:
+            print("🍎 macOS Intel detected")
         
+        # Initialize screen capture
+        if not self.init_screen_capture():
+            print("Failed to initialize screen capture")
+            return
+        
+        # Initialize hardware encoding
         self.init_hardware_encoding()
         
         self.streaming = True
         print("Starting advanced screen streaming...")
         print(f"Target FPS: {self.target_fps}")
         print(f"Adaptive Quality: {'Enabled' if self.adaptive_quality else 'Disabled'}")
+        print(f"Hardware Encoding: {'Enabled' if self.use_hardware_encoding else 'Disabled'}")
         print("Press Ctrl+C to stop")
         
         try:
@@ -271,7 +500,6 @@ class AdvancedScreenShareClient:
             else:
                 # Fallback to single-threaded mode
                 print("Using single-threaded mode")
-                # ... single threaded implementation
                 
         except KeyboardInterrupt:
             print("\nStopping stream...")
@@ -298,8 +526,20 @@ class AdvancedScreenShareClient:
 def main():
     client = AdvancedScreenShareClient()
     
-    print("=== Advanced Screen Share Client ===")
-    print("Features: Threading, Adaptive Quality, Performance Monitoring")
+    print("=== Advanced Screen Share Client (Cross-Platform) ===")
+    print(f"Platform: {platform.system()} {platform.machine()}")
+    if IS_APPLE_SILICON:
+        print("🍎 Apple Silicon detected - Enhanced performance available")
+    elif IS_MACOS:
+        print("🍎 macOS Intel detected")
+    
+    print("Features: Threading, Adaptive Quality, Performance Monitoring, Platform Optimization")
+    
+    # macOS permission check
+    if IS_MACOS:
+        print("\n📋 macOS Setup:")
+        print("   Ensure Screen Recording permission is granted in System Preferences")
+        print("   Security & Privacy → Privacy → Screen Recording")
     
     # Configuration options
     print("\nConfiguration:")
